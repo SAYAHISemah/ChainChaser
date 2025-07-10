@@ -247,7 +247,7 @@ async def handle_config_command(message):
             await message.channel.send("❌ Invalid slippage format")
 
 if __name__ == "__main__":
-    client.run("MTM0ODA2NjQ1ODg1MjEzNDk3NA.GQW67E.bsBIZijNGXPht8sQOiCxiig-0jTmBFdVH_eWek")
+    client.run("xx")
 
 
 

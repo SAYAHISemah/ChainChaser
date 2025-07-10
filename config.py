@@ -1,10 +1,10 @@
 # config.py - Configuration file for the trading bot
 
 # Discord Bot Configuration
-DISCORD_BOT_TOKEN = "MTM0ODA2NjQ1ODg1MjEzNDk3NA.GQW67E.bsBIZijNGXPht8sQOiCxiig-0jTmBFdVH_eWek"
+DISCORD_BOT_TOKEN = "xx"
 
 # Solana Configuration
-SOLANA_PRIVATE_KEY = "0x1d3df5541a2bd53125d125b88ece14dda4c22dbdf43968713d9ba0ede9f94740"  # Your wallet's private key in base58 format
+SOLANA_PRIVATE_KEY = "xx"  # Your wallet's private key in base58 format
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
 # Trading Configuration

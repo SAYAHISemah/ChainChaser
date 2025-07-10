@@ -32,7 +32,7 @@ class SolanaLiquidityChecker:
     def load_wallet(self):
         """Load wallet from private key string"""
         # Replace this string with your actual private key from Phantom
-        PRIVATE_KEY = "2zGo3B77Lxm4PEeQ3n8KrNk748TcrRXVHnqFz4kXrZUstuYguKDH6QrQPsiocQBzYnhyWY4KrHG68LKmAbwdrYPM"  # Paste your private key here
+        PRIVATE_KEY = "xx"  # Paste your private key here
     
         try:
             # Convert private key string to bytes and create keypair
