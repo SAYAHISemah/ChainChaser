@@ -10,6 +10,10 @@ import json
 from datetime import datetime
 import logging
 import os
+from dotenv import load_dotenv  # Add this import
+
+# Load environment variables from .env file
+load_dotenv()  # Add this line at the top
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Trading Configuration
 TRADING_CONFIG = {
     "enabled": True,
-    "sol_amount": 0.0001,  # Amount in SOL to trade on Solana
+    "sol_amount": 0.001,  # Amount in SOL to trade on Solana
     "eth_amount": 0.0000001,  # Amount in ETH to trade on Ethereum
     "slippage_bps": 500,  # 5% slippage for Solana
     "slippage_percent": 5,  # 5% slippage for Ethereum
@@ -48,6 +52,12 @@ if not DISCORD_TOKEN:
         logger.error("DISCORD_BOT_TOKEN not found in environment variables")
         logger.info("Please set DISCORD_BOT_TOKEN in your .env file")
         logger.info("Example: DISCORD_BOT_TOKEN=your_token_here")
+        
+        # Debug: Print what we actually found
+        logger.info("Available environment variables:")
+        for key in os.environ:
+            if 'DISCORD' in key or 'TOKEN' in key:
+                logger.info(f"  {key}: {os.environ[key][:10]}...")  # Only show first 10 chars for security
 
 class ChainAnalyzer:
     def __init__(self):
