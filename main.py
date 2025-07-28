@@ -23,23 +23,36 @@ logger = logging.getLogger(__name__)
 TRADING_CONFIG = {
     "enabled": True,
     "sol_amount": 0.001,  # Amount in SOL to trade on Solana
-    "eth_amount": 0.0000001,  # Amount in ETH to trade on Ethereum
+    "eth_amount": 0.00001,  # Amount in ETH to trade on Ethereum
+    "bnb_amount": 0.00001,  # Amount in BNB to trade on BSC
     "slippage_bps": 500,  # 5% slippage for Solana
-    "slippage_percent": 5,  # 5% slippage for Ethereum
+    "slippage_percent": 5,  # 5% slippage for Ethereum/BSC
     "priority_fee": 0.001,  # Priority fee in SOL
     "auto_execute": True,  # Set to False to only analyze without executing
     "max_market_cap": 1000000,  # Max market cap in USD (optional filter)
 }
 
-# RPC endpoints
+# RPC endpoints - Use multiple fallback endpoints
 RPC_ENDPOINTS = {
-    "ethereum": os.getenv("ETHEREUM_RPC_URL", "https://eth.llamarpc.com"),  # Free public RPC
-    "bsc": "https://bsc-dataseed.binance.org/",
+    "ethereum": [
+        os.getenv("ETHEREUM_RPC_URL", "https://eth.llamarpc.com"),
+        "https://rpc.ankr.com/eth",
+        "https://eth.public-rpc.com",
+        "https://ethereum.publicnode.com",
+        "https://eth.rpc.blxrbdn.com"
+    ],
+    "bsc": [
+        "https://bsc-dataseed.binance.org/",
+        "https://bsc-dataseed1.defibit.io/",
+        "https://bsc-dataseed1.ninicoin.io/",
+        "https://bsc.publicnode.com"
+    ],
 }
 
 # Private keys (use environment variables for security)
 PRIVATE_KEYS = {
     "ethereum": os.getenv("ETHEREUM_PRIVATE_KEY"),  # Your Ethereum private key
+    "bsc": os.getenv("BSC_PRIVATE_KEY", os.getenv("ETHEREUM_PRIVATE_KEY")),  # BSC private key (can be same as ETH)
     "solana": os.getenv("SOLANA_PRIVATE_KEY"),  # Your Solana private key
 }
 
@@ -59,20 +72,61 @@ if not DISCORD_TOKEN:
             if 'DISCORD' in key or 'TOKEN' in key:
                 logger.info(f"  {key}: {os.environ[key][:10]}...")  # Only show first 10 chars for security
 
+def get_working_rpc(endpoints):
+    """Try multiple RPC endpoints and return the first working one"""
+    for endpoint in endpoints:
+        try:
+            w3 = Web3(Web3.HTTPProvider(endpoint))
+            if w3.is_connected():
+                logger.info(f"Connected to RPC: {endpoint}")
+                return w3, endpoint
+            else:
+                logger.warning(f"Failed to connect to: {endpoint}")
+        except Exception as e:
+            logger.warning(f"Error connecting to {endpoint}: {e}")
+    
+    logger.error(f"All RPC endpoints failed for: {endpoints}")
+    return None, None
+
 class ChainAnalyzer:
     def __init__(self):
-        self.eth_provider = Web3(Web3.HTTPProvider(RPC_ENDPOINTS["ethereum"]))
-        self.bsc_provider = Web3(Web3.HTTPProvider(RPC_ENDPOINTS["bsc"]))
+        # Try to connect to Ethereum with fallback RPCs
+        self.eth_provider, self.eth_rpc_url = get_working_rpc(RPC_ENDPOINTS["ethereum"])
+        
+        # Try to connect to BSC with fallback RPCs
+        self.bsc_provider, self.bsc_rpc_url = get_working_rpc(RPC_ENDPOINTS["bsc"])
+        
         self.solana_checker = SolanaLiquidityChecker()
         
-        # Initialize Ethereum trader
-        self.ethereum_trader = EthereumTrader(
-            RPC_ENDPOINTS["ethereum"],
-            PRIVATE_KEYS.get("ethereum")
-        )
+        # Initialize Ethereum trader (works for both ETH and BSC)
+        self.ethereum_trader = None
+        self.bsc_trader = None
         
-        logger.info(f"ETH connected: {self.eth_provider.is_connected()}")
-        logger.info(f"BSC connected: {self.bsc_provider.is_connected()}")
+        # In ChainAnalyzer.__init__
+        if self.eth_provider and PRIVATE_KEYS.get("ethereum"):
+            try:
+                self.ethereum_trader = EthereumTrader(
+                    self.eth_rpc_url,
+                    PRIVATE_KEYS.get("ethereum"),
+                    fallback_rpcs=RPC_ENDPOINTS["ethereum"]  # Add fallback RPCs
+                )
+                logger.info("Ethereum trader initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Ethereum trader: {e}")
+
+        if self.bsc_provider and PRIVATE_KEYS.get("bsc"):
+            try:
+                self.bsc_trader = EthereumTrader(
+                    self.bsc_rpc_url,
+                    PRIVATE_KEYS.get("bsc"),
+                    fallback_rpcs=RPC_ENDPOINTS["bsc"]  # Add fallback RPCs
+                )
+                logger.info("BSC trader initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize BSC trader: {e}")
+        
+        logger.info(f"ETH connected: {self.eth_provider is not None}")
+        logger.info(f"BSC connected: {self.bsc_provider is not None}")
 
     def is_evm_address(self, addr: str) -> bool:
         return bool(re.match(r"^0x[a-fA-F0-9]{40}$", addr))
@@ -85,28 +139,49 @@ class ChainAnalyzer:
         opts = []
         
         # Check Ethereum DEXs
-        if self.eth_provider.is_connected():
-            # Check Uniswap V2
-            if self.ethereum_trader.check_uniswap_v2_liquidity(addr):
-                opts.append({
-                    "chain": "Ethereum", 
-                    "protocol": "UniswapV2", 
-                    "tradable": True,
-                    "dex_type": "uniswap_v2"
-                })
-            
-            # Check Sushiswap
-            if self.ethereum_trader.check_sushiswap_liquidity(addr):
-                opts.append({
-                    "chain": "Ethereum", 
-                    "protocol": "Sushiswap", 
-                    "tradable": True,
-                    "dex_type": "sushiswap"
-                })
+        if self.eth_provider and self.ethereum_trader:
+            try:
+                # Check Uniswap V2
+                if self.ethereum_trader.check_uniswap_v2_liquidity(addr):
+                    opts.append({
+                        "chain": "Ethereum", 
+                        "protocol": "UniswapV2", 
+                        "tradable": True,
+                        "dex_type": "uniswap_v2"
+                    })
+                
+                # Check Sushiswap
+                if self.ethereum_trader.check_sushiswap_liquidity(addr):
+                    opts.append({
+                        "chain": "Ethereum", 
+                        "protocol": "Sushiswap", 
+                        "tradable": True,
+                        "dex_type": "sushiswap"
+                    })
+            except Exception as e:
+                logger.error(f"Error checking Ethereum liquidity: {e}")
         
-        # BSC liquidity check (placeholder - you can expand this)
-        if self.bsc_provider.is_connected():
-            opts.append({"chain": "BSC", "protocol": "PancakeSwap", "tradable": True})
+        # Check BSC DEXs
+        if self.bsc_provider and self.bsc_trader:
+            try:
+                # For BSC, we'll use the same trader but check for PancakeSwap-style liquidity
+                # PancakeSwap uses the same contracts as Uniswap V2
+                if self.bsc_trader.check_uniswap_v2_liquidity(addr):  # PancakeSwap uses Uniswap V2 style
+                    opts.append({
+                        "chain": "BSC", 
+                        "protocol": "PancakeSwap", 
+                        "tradable": True,
+                        "dex_type": "pancakeswap"
+                    })
+            except Exception as e:
+                logger.error(f"Error checking BSC liquidity: {e}")
+                # If trader fails, add BSC as available (fallback)
+                opts.append({
+                    "chain": "BSC", 
+                    "protocol": "PancakeSwap", 
+                    "tradable": True,
+                    "dex_type": "pancakeswap"
+                })
         
         return opts
 
@@ -127,14 +202,21 @@ class ChainAnalyzer:
                     elif option["protocol"] == "Raydium":
                         return await self.execute_raydium_trade(address)
         
-        # Handle Ethereum trades
+        # Handle EVM trades (Ethereum and BSC)
         elif chain_type == "EVM":
             for option in trading_options:
-                if option["chain"] == "Ethereum" and option["tradable"]:
-                    if option.get("dex_type") == "uniswap_v2":
-                        return await self.execute_uniswap_trade(address)
-                    elif option.get("dex_type") == "sushiswap":
-                        return await self.execute_sushiswap_trade(address)
+                if option["tradable"]:
+                    # Handle Ethereum trades
+                    if option["chain"] == "Ethereum":
+                        if option.get("dex_type") == "uniswap_v2":
+                            return await self.execute_uniswap_trade(address)
+                        elif option.get("dex_type") == "sushiswap":
+                            return await self.execute_sushiswap_trade(address)
+                    
+                    # Handle BSC trades
+                    elif option["chain"] == "BSC":
+                        if option.get("dex_type") == "pancakeswap":
+                            return await self.execute_pancakeswap_trade(address)
         
         return {"executed": False, "reason": "No executable trading options found"}
 
@@ -177,9 +259,22 @@ class ChainAnalyzer:
             logger.error(f"Raydium trade failed: {e}")
             return {"executed": False, "reason": f"Raydium trade failed: {str(e)}"}
 
+    # In execute_uniswap_trade method of ChainAnalyzer:
+
     async def execute_uniswap_trade(self, token_address: str):
         """Execute Uniswap V2 trade"""
+        if not self.ethereum_trader:
+            return {"executed": False, "reason": "Ethereum trader not initialized"}
+        
+        # Check funds before attempting to trade
+        if not self.ethereum_trader.has_sufficient_funds(TRADING_CONFIG["eth_amount"]):
+            return {
+                "executed": False, 
+                "reason": f"Insufficient ETH balance for trade amount ({TRADING_CONFIG['eth_amount']}) plus gas"
+            }
+        
         try:
+        
             result = await self.ethereum_trader.buy_on_uniswap_v2(
                 token_address,
                 TRADING_CONFIG["eth_amount"],
@@ -189,6 +284,7 @@ class ChainAnalyzer:
                 "executed": True,
                 "protocol": "UniswapV2",
                 "amount": TRADING_CONFIG["eth_amount"],
+                "currency": "ETH",
                 "transaction": result.get("transaction_hash"),
                 "status": result.get("status", "pending"),
                 "chain": "Ethereum"
@@ -199,6 +295,9 @@ class ChainAnalyzer:
 
     async def execute_sushiswap_trade(self, token_address: str):
         """Execute Sushiswap trade"""
+        if not self.ethereum_trader:
+            return {"executed": False, "reason": "Ethereum trader not initialized"}
+            
         try:
             result = await self.ethereum_trader.buy_on_sushiswap(
                 token_address,
@@ -209,6 +308,7 @@ class ChainAnalyzer:
                 "executed": True,
                 "protocol": "Sushiswap",
                 "amount": TRADING_CONFIG["eth_amount"],
+                "currency": "ETH",
                 "transaction": result.get("transaction_hash"),
                 "status": result.get("status", "pending"),
                 "chain": "Ethereum"
@@ -216,6 +316,31 @@ class ChainAnalyzer:
         except Exception as e:
             logger.error(f"Sushiswap trade failed: {e}")
             return {"executed": False, "reason": f"Sushiswap trade failed: {str(e)}"}
+
+    async def execute_pancakeswap_trade(self, token_address: str):
+        """Execute PancakeSwap trade on BSC"""
+        if not self.bsc_trader:
+            return {"executed": False, "reason": "BSC trader not initialized"}
+            
+        try:
+            # Use the same Uniswap V2 function since PancakeSwap is a fork
+            result = await self.bsc_trader.buy_on_uniswap_v2(
+                token_address,
+                TRADING_CONFIG["bnb_amount"],
+                TRADING_CONFIG["slippage_percent"]
+            )
+            return {
+                "executed": True,
+                "protocol": "PancakeSwap",
+                "amount": TRADING_CONFIG["bnb_amount"],
+                "currency": "BNB",
+                "transaction": result.get("transaction_hash"),
+                "status": result.get("status", "pending"),
+                "chain": "BSC"
+            }
+        except Exception as e:
+            logger.error(f"PancakeSwap trade failed: {e}")
+            return {"executed": False, "reason": f"PancakeSwap trade failed: {str(e)}"}
 
 # Discord Bot Class
 class TradingBot(discord.Client):
@@ -304,17 +429,19 @@ class TradingBot(discord.Client):
                         inline=False
                     )
                     
-                    # Add trading config info
-                    if chain_type == "Solana":
+                    # Add trading config info based on available chains
+                    config_info = []
+                    if any(opt['chain'] == 'Solana' for opt in tradable_options):
+                        config_info.append(f"**Solana:** {TRADING_CONFIG['sol_amount']} SOL ({TRADING_CONFIG['slippage_bps']/100}% slippage)")
+                    if any(opt['chain'] == 'Ethereum' for opt in tradable_options):
+                        config_info.append(f"**Ethereum:** {TRADING_CONFIG['eth_amount']} ETH ({TRADING_CONFIG['slippage_percent']}% slippage)")
+                    if any(opt['chain'] == 'BSC' for opt in tradable_options):
+                        config_info.append(f"**BSC:** {TRADING_CONFIG['bnb_amount']} BNB ({TRADING_CONFIG['slippage_percent']}% slippage)")
+                    
+                    if config_info:
                         embed.add_field(
-                            name="⚙️ Trading Config (Solana):",
-                            value=f"Amount: {TRADING_CONFIG['sol_amount']} SOL\nSlippage: {TRADING_CONFIG['slippage_bps']/100}%",
-                            inline=True
-                        )
-                    elif chain_type == "EVM":
-                        embed.add_field(
-                            name="⚙️ Trading Config (Ethereum):",
-                            value=f"Amount: {TRADING_CONFIG['eth_amount']} ETH\nSlippage: {TRADING_CONFIG['slippage_percent']}%",
+                            name="⚙️ Trading Config:",
+                            value="\n".join(config_info),
                             inline=True
                         )
                 
@@ -334,8 +461,7 @@ class TradingBot(discord.Client):
                     value="❌ No trading options found",
                     inline=False
                 )
-            
-            # Execute trade if enabled
+
             trade_result = None
             if TRADING_CONFIG["enabled"] and any(opt.get("tradable", False) for opt in trading_options):
                 try:
@@ -345,32 +471,46 @@ class TradingBot(discord.Client):
                         embed.add_field(
                             name="🚀 Trade Executed!",
                             value=f"**Protocol:** {trade_result.get('protocol')}\n"
-                                  f"**Amount:** {trade_result.get('amount')} {trade_result.get('chain')}\n"
-                                  f"**Status:** {trade_result.get('status')}\n"
-                                  f"**TX:** `{trade_result.get('transaction', trade_result.get('signature', 'N/A'))}`",
+                                f"**Amount:** {trade_result.get('amount')} {trade_result.get('currency', trade_result.get('chain'))}\n"
+                                f"**Chain:** {trade_result.get('chain')}\n"
+                                f"**Status:** {trade_result.get('status')}\n"
+                                f"**TX:** `{trade_result.get('transaction', trade_result.get('signature', 'N/A'))}`",
                             inline=False
                         )
                         embed.color = 0x00ff00
                     else:
+                        # Provide more detailed error information
+                        reason = trade_result.get('reason', 'Unknown')
+                        details = ""
+                        
+                        if isinstance(reason, dict) and 'message' in reason:
+                            if reason['message'] == 'failed to send tx':
+                                details = "\n\n**Possible causes:**\n" + \
+                                        "- Insufficient funds for transaction and gas\n" + \
+                                        "- RPC endpoint connection issues\n" + \
+                                        "- Network congestion\n\n" + \
+                                        "**Action needed:**\n" + \
+                                        "Check your wallet balance and try again"
+                        
                         embed.add_field(
                             name="⚠️ Trade Not Executed",
-                            value=f"Reason: {trade_result.get('reason', 'Unknown')}",
+                            value=f"**Reason:** {reason}{details}",
                             inline=False
                         )
                 except Exception as e:
                     logger.error(f"Trade execution failed: {e}")
                     embed.add_field(
                         name="❌ Trade Failed",
-                        value=f"Error: {str(e)}",
+                        value=f"**Error:** {str(e)}\n\n**Details:** {type(e).__name__}",
                         inline=False
                     )
             
-            # Update the message with results
+            # Send the final embed
             await processing_msg.edit(content="", embed=embed)
             
         except Exception as e:
-            logger.error(f"Error in process_address: {e}")
-            await processing_msg.edit(content=f"❌ Error analyzing address: {str(e)}")
+            logger.error(f"Error processing address {address}: {e}")
+            await processing_msg.edit(content=f"❌ Error processing address: {str(e)}")
 
 # Main execution
 def main():
